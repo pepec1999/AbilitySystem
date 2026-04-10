@@ -1,0 +1,64 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+local sharedFolder = ReplicatedStorage:WaitForChild("Shared")
+local abilityRemote = sharedFolder:WaitForChild("AbilityRemote")
+
+local canUseAbility = true
+local canReflect = true
+local ABILITY_COOLDOWN = 5
+
+local function useAbility()
+	if not canUseAbility then
+		return
+	end
+
+	local camera = Workspace.CurrentCamera
+	if not camera then
+		return
+	end
+
+	canUseAbility = false
+	abilityRemote:FireServer("Cast", camera.CFrame.LookVector)
+
+	task.delay(ABILITY_COOLDOWN, function()
+		canUseAbility = true
+	end)
+end
+
+local function reflectProjectile()
+	if not canReflect then
+		return
+	end
+
+	canReflect = false
+	abilityRemote:FireServer("Reflect")
+end
+
+abilityRemote.OnClientEvent:Connect(function(action, cooldownDuration)
+	if action ~= "ReflectCooldown" then
+		return
+	end
+
+	if cooldownDuration <= 0 then
+		canReflect = true
+		return
+	end
+
+	task.delay(cooldownDuration, function()
+		canReflect = true
+	end)
+end)
+
+UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+	if gameProcessedEvent then
+		return
+	end
+
+	if input.KeyCode == Enum.KeyCode.Q then
+		useAbility()
+	elseif input.KeyCode == Enum.KeyCode.E then
+		reflectProjectile()
+	end
+end)
