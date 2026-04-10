@@ -1,0 +1,148 @@
+local RunService = game:GetService("RunService")
+
+local CastAbility = {}
+
+local function spawnProjectile(context, player, lookVector)
+	local character = player.Character
+	if not character then
+		return
+	end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if not humanoid or humanoid.Health <= 0 or not rootPart then
+		return
+	end
+
+	if typeof(lookVector) ~= "Vector3" or lookVector.Magnitude <= 0 then
+		lookVector = rootPart.CFrame.LookVector
+	end
+
+	local direction = lookVector.Unit
+	local spawnPosition = rootPart.Position + direction * 4
+
+	local projectile = Instance.new("Part")
+	projectile.Name = "AbilityProjectile"
+	projectile.Size = context.config.projectileSize
+	projectile.Material = Enum.Material.Neon
+	projectile.Color = Color3.fromRGB(255, 170, 0)
+	projectile.CanCollide = false
+	projectile.CanQuery = false
+	projectile.Massless = true
+	projectile.Anchored = false
+	projectile.CFrame = CFrame.lookAt(spawnPosition, spawnPosition + direction)
+	projectile.Parent = workspace
+
+	local bodyVelocity = Instance.new("BodyVelocity")
+	bodyVelocity.MaxForce = Vector3.new(1, 1, 1) * 1_000_000
+	bodyVelocity.Velocity = direction * context.config.projectileSpeed
+	bodyVelocity.Parent = projectile
+
+	local resolved = false
+	local heartbeatConnection
+	local touchConnection
+
+	context.state.activeProjectiles[projectile] = {
+		owner = player,
+		bodyVelocity = bodyVelocity,
+		sourcePosition = spawnPosition,
+		ignoredCharacter = character,
+		wasReflected = false,
+		distanceTravelled = 0,
+		lastPosition = projectile.Position,
+	}
+
+	local function destroyProjectile(hitPosition)
+		if resolved then
+			return
+		end
+
+		resolved = true
+
+		if touchConnection then
+			touchConnection:Disconnect()
+		end
+
+		if heartbeatConnection then
+			heartbeatConnection:Disconnect()
+		end
+
+		local projectileData = context.state.activeProjectiles[projectile]
+		context.state.activeProjectiles[projectile] = nil
+
+		if projectile.Parent then
+			projectile:Destroy()
+		end
+
+		if hitPosition then
+			context.utils.createImpactSphere(hitPosition, not (projectileData and projectileData.wasReflected))
+		end
+	end
+
+	touchConnection = projectile.Touched:Connect(function(hit)
+		if resolved then
+			return
+		end
+
+		if hit:GetAttribute("IsReflectShield") then
+			return
+		end
+
+		local projectileData = context.state.activeProjectiles[projectile]
+		if projectileData and projectileData.ignoredCharacter and hit:IsDescendantOf(projectileData.ignoredCharacter) then
+			return
+		end
+
+		destroyProjectile(projectile.Position)
+	end)
+
+	heartbeatConnection = RunService.Heartbeat:Connect(function()
+		if resolved or not projectile.Parent then
+			destroyProjectile()
+			return
+		end
+
+		local projectileData = context.state.activeProjectiles[projectile]
+		if not projectileData then
+			destroyProjectile()
+			return
+		end
+
+		local currentPosition = projectile.Position
+		projectileData.distanceTravelled += (currentPosition - projectileData.lastPosition).Magnitude
+		projectileData.lastPosition = currentPosition
+
+		if projectileData.distanceTravelled >= context.config.abilityRange then
+			destroyProjectile()
+		end
+	end)
+
+	task.delay(3, function()
+		destroyProjectile()
+	end)
+end
+
+function CastAbility.handle(context, player, lookVector)
+	local currentTime = os.clock()
+	local previousUse = context.state.lastAbilityUse[player]
+
+	if previousUse and currentTime - previousUse < context.config.abilityCooldown then
+		return
+	end
+
+	context.state.lastAbilityUse[player] = currentTime
+	spawnProjectile(context, player, lookVector)
+end
+
+function CastAbility.cleanup(context, player)
+	for projectile, projectileData in context.state.activeProjectiles do
+		if projectileData.owner == player then
+			context.state.activeProjectiles[projectile] = nil
+			if projectile.Parent then
+				projectile:Destroy()
+			end
+		end
+	end
+end
+
+return CastAbility
