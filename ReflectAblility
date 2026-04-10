@@ -1,0 +1,136 @@
+local ReflectAbility = {}
+
+local function reflectProjectilePart(context, projectile, player, character)
+	local projectileData = context.state.activeProjectiles[projectile]
+	if not projectileData then
+		return false
+	end
+
+	if projectileData.owner == player then
+		return false
+	end
+
+	local returnDirection = projectileData.sourcePosition - projectile.Position
+	if returnDirection.Magnitude <= 0 then
+		returnDirection = -projectileData.bodyVelocity.Velocity
+	end
+
+	if returnDirection.Magnitude <= 0 then
+		return false
+	end
+
+	local normalizedDirection = returnDirection.Unit
+	projectileData.bodyVelocity.Velocity = normalizedDirection * context.config.projectileSpeed
+	projectile.CFrame = CFrame.lookAt(projectile.Position, projectile.Position + normalizedDirection)
+	projectileData.ignoredCharacter = character
+	projectileData.wasReflected = true
+	projectileData.distanceTravelled = 0
+	projectileData.lastPosition = projectile.Position
+
+	return true
+end
+
+local function startReflect(context, player)
+	local character = player.Character
+	if not character then
+		return false
+	end
+
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if not rootPart then
+		return false
+	end
+
+	local shield = Instance.new("Part")
+	shield.Name = "ReflectShield"
+	shield.Size = context.config.reflectShieldSize
+	shield:SetAttribute("IsReflectShield", true)
+	shield.Anchored = true
+	shield.CanCollide = false
+	shield.CanQuery = false
+	shield.CanTouch = true
+	shield.Transparency = 0.35
+	shield.Material = Enum.Material.ForceField
+	shield.Color = Color3.fromRGB(120, 220, 255)
+	shield.CFrame = rootPart.CFrame + (rootPart.CFrame.LookVector * context.config.reflectDistance)
+	shield.Parent = workspace
+
+	local touchConnection
+	local reflectedProjectiles = {}
+	local reflectedAnyProjectile = false
+
+	context.state.activeReflects[player] = {
+		shield = shield,
+		connection = nil,
+	}
+
+	touchConnection = shield.Touched:Connect(function(hit)
+		if reflectedProjectiles[hit] then
+			return
+		end
+
+		if not context.state.activeProjectiles[hit] then
+			return
+		end
+
+		reflectedProjectiles[hit] = true
+		if reflectProjectilePart(context, hit, player, character) then
+			reflectedAnyProjectile = true
+		end
+	end)
+
+	context.state.activeReflects[player].connection = touchConnection
+
+	task.delay(context.config.reflectDuration, function()
+		local reflectState = context.state.activeReflects[player]
+		context.state.activeReflects[player] = nil
+
+		if reflectState and reflectState.connection then
+			reflectState.connection:Disconnect()
+		end
+
+		if shield.Parent then
+			shield:Destroy()
+		end
+
+		local cooldownDuration = reflectedAnyProjectile and context.config.reflectSuccessCooldown or context.config.reflectMissCooldown
+		context.state.reflectCooldownUntil[player] = os.clock() + cooldownDuration
+		context.remote:FireClient(player, "ReflectCooldown", cooldownDuration)
+	end)
+
+	return true
+end
+
+function ReflectAbility.handle(context, player)
+	local currentTime = os.clock()
+
+	if context.state.activeReflects[player] then
+		return
+	end
+
+	local cooldownUntil = context.state.reflectCooldownUntil[player]
+	if cooldownUntil and currentTime < cooldownUntil then
+		context.remote:FireClient(player, "ReflectCooldown", cooldownUntil - currentTime)
+		return
+	end
+
+	local startedReflect = startReflect(context, player)
+	if not startedReflect then
+		context.remote:FireClient(player, "ReflectCooldown", 0)
+	end
+end
+
+function ReflectAbility.cleanup(context, player)
+	local reflectState = context.state.activeReflects[player]
+	if reflectState then
+		if reflectState.connection then
+			reflectState.connection:Disconnect()
+		end
+
+		if reflectState.shield and reflectState.shield.Parent then
+			reflectState.shield:Destroy()
+		end
+	end
+end
+
+return ReflectAbility
