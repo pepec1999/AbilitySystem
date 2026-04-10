@@ -1,0 +1,126 @@
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+
+local castAbility = require(script:WaitForChild("Abilities"):WaitForChild("CastAbility"))
+local reflectAbility = require(script:WaitForChild("Abilities"):WaitForChild("ReflectAbility"))
+
+local sharedFolder = ReplicatedStorage:WaitForChild("Shared")
+
+local abilityRemote = sharedFolder:FindFirstChild("AbilityRemote")
+
+if not abilityRemote then
+	abilityRemote = Instance.new("RemoteEvent")
+	abilityRemote.Name = "AbilityRemote"
+	abilityRemote.Parent = sharedFolder
+end
+
+local context = {
+	remote = abilityRemote,
+	config = {
+		abilityRange = 40,
+		abilityCooldown = 5,
+		reflectSuccessCooldown = 1,
+		reflectMissCooldown = 5,
+		reflectShieldSize = Vector3.new(4, 4, 1),
+		reflectDistance = 2,
+		reflectDuration = 0.75,
+		projectileSpeed = 35,
+		projectileSize = Vector3.new(2, 2, 4),
+		sphereGrowthSize = Vector3.new(18, 18, 18),
+		sphereDamage = 15,
+		sphereKnockback = 105,
+	},
+	state = {
+		lastAbilityUse = {},
+		reflectCooldownUntil = {},
+		activeReflects = {},
+		activeProjectiles = {},
+	},
+	utils = {},
+}
+
+function context.utils.damageHumanoidsInSphere(position, applyKnockback)
+	local hitParts = workspace:GetPartBoundsInRadius(position, context.config.sphereGrowthSize.X / 2)
+	local damagedHumanoids = {}
+
+	for _, hitPart in hitParts do
+		local model = hitPart:FindFirstAncestorOfClass("Model")
+		if model then
+			local humanoid = model:FindFirstChildOfClass("Humanoid")
+			if humanoid and not damagedHumanoids[humanoid] then
+				damagedHumanoids[humanoid] = true
+				humanoid:TakeDamage(context.config.sphereDamage)
+
+				if applyKnockback then
+					local rootPart = model:FindFirstChild("HumanoidRootPart")
+					if rootPart and not rootPart.Anchored then
+						local knockbackDirection = rootPart.Position - position
+						if knockbackDirection.Magnitude <= 0 then
+							knockbackDirection = Vector3.new(0, 1, 0)
+						else
+							knockbackDirection = (knockbackDirection.Unit + Vector3.new(0, 0.2, 0)).Unit
+						end
+
+						rootPart.AssemblyLinearVelocity += knockbackDirection * context.config.sphereKnockback
+					end
+				end
+			end
+		end
+	end
+end
+
+function context.utils.createImpactSphere(position, applyKnockback)
+	local sphere = Instance.new("Part")
+	sphere.Name = "AbilityImpact"
+	sphere.Shape = Enum.PartType.Ball
+	sphere.Anchored = true
+	sphere.CanCollide = false
+	sphere.CanQuery = true
+	sphere.CanTouch = false
+	sphere.Material = Enum.Material.Neon
+	sphere.Color = Color3.fromRGB(85, 170, 255)
+	sphere.Transparency = 0.2
+	sphere.Size = Vector3.new(1, 1, 1)
+	sphere.CFrame = CFrame.new(position)
+	sphere.Parent = workspace
+
+	local tween = TweenService:Create(
+		sphere,
+		TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{
+			Size = context.config.sphereGrowthSize,
+			Transparency = 1,
+		}
+	)
+
+	context.utils.damageHumanoidsInSphere(position, applyKnockback)
+
+	tween:Play()
+	tween.Completed:Once(function()
+		sphere:Destroy()
+	end)
+end
+
+local AbilityService = {}
+
+function AbilityService.start()
+	abilityRemote.OnServerEvent:Connect(function(player, action, lookVector)
+		if action == "Reflect" then
+			reflectAbility.handle(context, player)
+			return
+		end
+
+		castAbility.handle(context, player, lookVector)
+	end)
+
+	Players.PlayerRemoving:Connect(function(player)
+		reflectAbility.cleanup(context, player)
+		castAbility.cleanup(context, player)
+		context.state.lastAbilityUse[player] = nil
+		context.state.reflectCooldownUntil[player] = nil
+		context.state.activeReflects[player] = nil
+	end)
+end
+
+return AbilityService
