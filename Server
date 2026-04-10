@@ -1,0 +1,4 @@
+local abilityServiceModule = script.Parent:FindFirstChild("AbilityService") :: ModuleScript
+local abilityService = require(abilityServiceModule)
+
+abilityService.start()
